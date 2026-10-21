@@ -3,6 +3,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
 import ingest
+import refine
 
 
 @pytest.fixture(scope="session")
@@ -29,6 +30,17 @@ def raw_dir(spark, tmp_path_factory):
         for entry in ingest.read_manifest():
             ingest.ingest_file(spark, entry["source_file"], entry["session_date"])
     return raw_dir
+
+
+@pytest.fixture(scope="session")
+def refined_dir(spark, raw_dir, tmp_path_factory):
+    refined_dir = tmp_path_factory.mktemp("refined")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(refine, "RAW_DIR", raw_dir)
+        patch.setattr(refine, "REFINED_DIR", refined_dir)
+        for entity in refine.INTEGER_COLUMNS:
+            refine.refine_entity(spark, entity)
+    return refined_dir
 
 
 @pytest.fixture(scope="session")

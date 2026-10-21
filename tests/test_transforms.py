@@ -1,5 +1,9 @@
+from datetime import datetime
+
 import pytest
 from pyspark.sql import functions as F
+
+import refine
 
 KEY = ["session_date", "instrument", "message"]
 
@@ -71,3 +75,54 @@ def test_trade_and_flow_timestamps_agree(trades_with_causing_order):
     disagreeing = trades_with_causing_order.filter(F.col("flow_ts") != F.col("event_ts"))
     assert disagreeing.count() == 0
 
+
+def test_unparseable_integers_are_flagged_not_cast(spark):
+    values = ["42", "-5", None, "1.5", "abc", " 42", "9223372036854775808"]
+    rows = spark.createDataFrame([(value,) for value in values], "quantity string")
+    flagged = rows.select("quantity", refine.unparseable(["quantity"]).alias("failed")).collect()
+    # "1.5" matters most: a bare cast would quietly turn it into 1
+    assert {row["quantity"]: row["failed"] for row in flagged} == {
+        "42": False, "-5": False, None: False,
+        "1.5": True, "abc": True, " 42": True, "9223372036854775808": True,
+    }
+
+
+def test_only_the_newest_batch_per_source_file_is_kept(spark):
+    rows = spark.createDataFrame(
+        [
+            ("session_01/trades_AAPL.csv", "wrong-date", datetime(2026, 10, 21, 8, 0)),
+            ("session_01/trades_AAPL.csv", "corrected", datetime(2026, 10, 21, 9, 0)),
+            ("session_01/trades_GOOG.csv", "only", datetime(2026, 10, 21, 8, 0)),
+        ],
+        "source_file string, batch_id string, ingested_at timestamp",
+    )
+    kept = {row["batch_id"] for row in refine.latest_batches(rows).collect()}
+    assert kept == {"corrected", "only"}
+
+
+def test_refine_keeps_every_raw_row_of_clean_data(spark, refined_dir, trades_raw, flow_raw):
+    for entity, raw in [("trades", trades_raw), ("flow", flow_raw)]:
+        refined = spark.read.parquet(str(refined_dir / entity))
+        trade_date = F.to_date("session_date").alias("trade_date")
+        raw_counts = raw.groupBy(trade_date, "instrument").count()
+        refined_counts = refined.groupBy("trade_date", "instrument").count()
+        assert raw_counts.count() > 0
+        assert sorted(raw_counts.collect()) == sorted(refined_counts.collect())
+        assert spark.read.parquet(str(refined_dir / "rejects" / entity)).count() == 0
+
+
+def test_refined_is_one_file_per_trade_date_and_instrument(refined_dir):
+    for entity in ("trades", "flow"):
+        files = sorted((refined_dir / entity).rglob("*.parquet"))
+        partitions = [file.parent.relative_to(refined_dir / entity).parts for file in files]
+        assert len(partitions) == len(set(partitions)) == 9
+        assert all(date.startswith("trade_date=") and instrument.startswith("instrument=")
+                   for date, instrument in partitions)
+
+
+def test_venue_is_null_before_day_3_and_set_on_it(spark, refined_dir):
+    trades = spark.read.parquet(str(refined_dir / "trades"))
+    venues = trades.groupBy("trade_date").agg(F.collect_set("venue").alias("venues")).collect()
+    assert {str(row["trade_date"]): sorted(row["venues"]) for row in venues} == {
+        "2026-10-19": [], "2026-10-20": [], "2026-10-21": ["SIM"],
+    }
