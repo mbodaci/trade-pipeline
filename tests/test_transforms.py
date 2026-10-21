@@ -10,9 +10,7 @@ KEY = ["session_date", "instrument", "message"]
 
 @pytest.fixture(scope="module")
 def trades_with_causing_order(flow_raw, trades_raw):
-    causing_order = flow_raw.select(
-        *KEY, F.col("id").alias("flow_id"), F.col("event_ts").alias("flow_ts")
-    )
+    causing_order = flow_raw.select(*KEY, F.col("id").alias("flow_id"))
     return trades_raw.join(causing_order, KEY, "left")
 
 
@@ -41,7 +39,6 @@ def test_aapl_message_46_is_the_market_buy_that_swept_three_asks(flow_raw, trade
         ("28", "25", "99998", "29"),
         ("28", "13", "99999", "29"),
     ])
-    assert formatted_ts(orders) == formatted_ts(fills) == {"2026-10-19 09:30:46"}
 
 
 def test_every_trade_has_a_flow_row_at_its_message(trades_with_causing_order):
@@ -66,14 +63,34 @@ def test_passive_order_was_added_before_the_trade(flow_raw, trades_raw):
     assert never_added_or_later.count() == 0
 
 
-def test_event_ts_carries_no_time_zone(flow_raw, trades_raw):
-    assert flow_raw.schema["event_ts"].dataType.simpleString() == "timestamp_ntz"
-    assert trades_raw.schema["event_ts"].dataType.simpleString() == "timestamp_ntz"
+def test_raw_holds_no_event_ts(flow_raw, trades_raw):
+    assert "event_ts" not in flow_raw.columns
+    assert "event_ts" not in trades_raw.columns
 
 
-def test_trade_and_flow_timestamps_agree(trades_with_causing_order):
-    disagreeing = trades_with_causing_order.filter(F.col("flow_ts") != F.col("event_ts"))
-    assert disagreeing.count() == 0
+def test_aapl_message_46_is_stamped_09_30_46(flow_refined, trades_refined):
+    at_message_46 = (
+        (F.col("trade_date") == "2026-10-19")
+        & (F.col("instrument") == "AAPL")
+        & (F.col("message") == 46)
+    )
+    orders = flow_refined.filter(at_message_46)
+    fills = trades_refined.filter(at_message_46)
+    assert orders.count() == 1 and fills.count() == 3
+    assert formatted_ts(orders) == formatted_ts(fills) == {"2026-10-19 09:30:46"}
+
+
+def test_event_ts_carries_no_time_zone(flow_refined, trades_refined):
+    assert flow_refined.schema["event_ts"].dataType.simpleString() == "timestamp_ntz"
+    assert trades_refined.schema["event_ts"].dataType.simpleString() == "timestamp_ntz"
+
+
+def test_trade_and_flow_timestamps_agree(flow_refined, trades_refined):
+    refined_key = ["trade_date", "instrument", "message"]
+    causing_order = flow_refined.select(*refined_key, F.col("event_ts").alias("flow_ts"))
+    joined = trades_refined.join(causing_order, refined_key, "left")
+    assert joined.count() > 0
+    assert joined.filter(~F.col("flow_ts").eqNullSafe(F.col("event_ts"))).count() == 0
 
 
 def test_unparseable_integers_are_flagged_not_cast(spark):

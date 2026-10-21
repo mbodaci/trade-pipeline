@@ -28,12 +28,26 @@ Columns: `message, aggressor_id, passive_id, price, quantity`.
 
 Two things the engine does not emit, which the pipeline must derive:
 - **Instrument** — the engine is single-instrument; instrument comes from the
-  source filename.
+  source filename. This is provenance, so it is captured at ingest.
 - **Time** — `message` is a logical sequence number, not wall-clock time. The
-  event timestamp is derived from it at ingest.
+  event timestamp (`TIMESTAMP_NTZ`) is derived from it in refine, not ingest.
 
-Both derivations happen in the ingest layer and must be documented in the README.
-This adaptation is part of the engineering, not something to hide.
+Both derivations must be documented in the README. This adaptation is part of
+the engineering, not something to hide.
+
+## Layer boundary: what goes in raw
+Raw holds only what cannot be recovered later: the source text as written, the
+flow's message number, and provenance (instrument, session date, source file,
+batch id, ingest time). Anything derivable from those belongs in refine.
+
+Why: raw is immutable and its batch id is a content hash of the source file. A
+derived column in raw cannot be corrected when its derivation changes, because
+the unchanged file maps to the same batch and is skipped. Refine is rebuilt
+from raw on every run, so a changed rule corrects every row.
+
+The flow's `message` stays in raw for exactly this reason: it is the row's
+position in the source file, and Parquet does not preserve row order, so once
+the file is gone it cannot be recovered.
 
 ## Environment and commands
 ```bash

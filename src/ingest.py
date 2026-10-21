@@ -1,7 +1,7 @@
 import csv
 import hashlib
 import re
-from datetime import date, time
+from datetime import date
 from pathlib import Path
 
 from pyspark.sql import SparkSession
@@ -11,10 +11,6 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 MANIFEST = DATA_DIR / "manifest.csv"
 RAW_DIR = ROOT / "lake" / "raw"
-
-# The engine has no clock: message n of a session is stamped SESSION_OPEN + n seconds
-SESSION_OPEN = time(9, 30)
-SECONDS_PER_MESSAGE = 1
 
 # The engine is single-instrument, so the instrument is only recoverable from the filename
 SOURCE_NAME = re.compile(r"^(trades|flow)_([A-Z]+)\.csv$")
@@ -67,13 +63,6 @@ def read_flow(spark, path):
     )
 
 
-# TIMESTAMP_NTZ: the engine has no clock and no zone, so a zoned timestamp would invent one
-def event_ts_for(session_date):
-    session_open = F.to_timestamp_ntz(F.lit(f"{session_date} {SESSION_OPEN}"))
-    offset = F.make_interval(secs=F.col("message").cast("long") * SECONDS_PER_MESSAGE)
-    return session_open + offset
-
-
 def ingest_file(spark, source_file, session_date):
     path = DATA_DIR / source_file
     entity, instrument = parse_source_name(path.name)
@@ -90,7 +79,6 @@ def ingest_file(spark, source_file, session_date):
         read_source(spark, path)
         .withColumn("instrument", F.lit(instrument))
         .withColumn("session_date", F.lit(session_date))
-        .withColumn("event_ts", event_ts_for(session_date))
         .withColumn("source_file", F.lit(source_file))
         .withColumn("ingested_at", F.current_timestamp())
     )

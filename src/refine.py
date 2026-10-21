@@ -1,3 +1,4 @@
+from datetime import time
 from pathlib import Path
 
 from pyspark.sql import SparkSession, Window
@@ -15,6 +16,10 @@ INTEGER_COLUMNS = {
 }
 INTEGER_PATTERN = r"^-?[0-9]+$"
 PARTITION_COLUMNS = ["trade_date", "instrument"]
+
+# The engine has no clock: message n of a session is stamped SESSION_OPEN + n seconds
+SESSION_OPEN = time(9, 30)
+SECONDS_PER_MESSAGE = 1
 
 
 def read_raw(spark, entity):
@@ -52,6 +57,14 @@ def typed(rows, columns):
     return rows.select(*casts)
 
 
+# Derived here, not in raw: if the rule changes, the next refine run corrects every row.
+# TIMESTAMP_NTZ because the engine has no clock and no zone, so a zoned timestamp would invent one.
+def event_ts():
+    session_open = F.to_timestamp_ntz(F.concat_ws(" ", "session_date", F.lit(str(SESSION_OPEN))))
+    offset = F.make_interval(secs=F.col("message") * SECONDS_PER_MESSAGE)
+    return session_open + offset
+
+
 def refine_entity(spark, entity):
     raw = read_raw(spark, entity)
     latest = latest_batches(raw)
@@ -62,6 +75,7 @@ def refine_entity(spark, entity):
     rejects = latest.filter(failed)
     refined = (
         typed(latest.filter(~failed), columns)
+        .withColumn("event_ts", event_ts())
         .withColumn("trade_date", F.to_date("session_date"))
         .drop("session_date")
     )

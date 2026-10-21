@@ -56,3 +56,13 @@ def trades_raw(spark, raw_dir):
         .parquet(str(raw_dir / "trades"))
         .withColumn("message", F.col("message").cast("long"))
     )
+
+
+@pytest.fixture(scope="session")
+def flow_refined(spark, refined_dir):
+    return spark.read.parquet(str(refined_dir / "flow"))
+
+
+@pytest.fixture(scope="session")
+def trades_refined(spark, refined_dir):
+    return spark.read.parquet(str(refined_dir / "trades"))
