@@ -50,7 +50,7 @@ command. A file not in the manifest is reported and skipped, because it has no d
 
 | Layer | Holds | Written |
 |---|---|---|
-| raw | the source as written, plus what cannot be recovered later | once per source file, never rewritten |
+| raw | source as written, plus what cannot be recovered later | once per file, never rewritten |
 | refined | typed, validated rows with derived columns | rebuilt from raw on every run |
 | curated | aggregates for use | rebuilt from refined |
 

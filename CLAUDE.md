@@ -50,9 +50,11 @@ position in the source file, and Parquet does not preserve row order, so once
 the file is gone it cannot be recovered.
 
 ## Environment and commands
+Runs in WSL2 (Ubuntu 22.04, Python 3.10, Java 17). Native Windows lacks the
+Hadoop binaries Spark needs for local files.
 ```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -74,7 +76,8 @@ python src/reconcile.py
 ### Comments
 Sparse and purposeful. Follow these rules:
 - **Section markers** for logical blocks: `# Derive event timestamp from sequence number`
-- **Why-comments** when the reason is not obvious from the code: `# repartition before write: avoids one small file per input partition`
+- **Why-comments** when the reason is not obvious from the code:
+  `# repartition before write: avoids one small file per input partition`
 - **No comments** on self-explanatory lines.
 - **No docstrings on trivial functions.** Function and parameter names should carry it.
 - **No per-line narration.** If five consecutive lines each have a comment, something is wrong.
