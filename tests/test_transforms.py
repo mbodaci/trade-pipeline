@@ -1,35 +1,7 @@
 import pytest
 from pyspark.sql import functions as F
 
-import ingest
-
 KEY = ["session_date", "instrument", "message"]
-
-
-# Ingest every manifest entry into a temporary lake, so the tests never read or write lake/
-@pytest.fixture(scope="module")
-def raw_dir(spark, tmp_path_factory):
-    raw_dir = tmp_path_factory.mktemp("raw")
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(ingest, "RAW_DIR", raw_dir)
-        for entry in ingest.read_manifest():
-            ingest.ingest_file(spark, entry["source_file"], entry["session_date"])
-    return raw_dir
-
-
-@pytest.fixture(scope="module")
-def flow_raw(spark, raw_dir):
-    return spark.read.parquet(str(raw_dir / "flow"))
-
-
-@pytest.fixture(scope="module")
-def trades_raw(spark, raw_dir):
-    # message is a string in raw trades but a number in raw flow, which ingest generates
-    return (
-        spark.read.option("mergeSchema", True)
-        .parquet(str(raw_dir / "trades"))
-        .withColumn("message", F.col("message").cast("long"))
-    )
 
 
 @pytest.fixture(scope="module")
@@ -90,6 +62,12 @@ def test_passive_order_was_added_before_the_trade(flow_raw, trades_raw):
     assert never_added_or_later.count() == 0
 
 
+def test_event_ts_carries_no_time_zone(flow_raw, trades_raw):
+    assert flow_raw.schema["event_ts"].dataType.simpleString() == "timestamp_ntz"
+    assert trades_raw.schema["event_ts"].dataType.simpleString() == "timestamp_ntz"
+
+
 def test_trade_and_flow_timestamps_agree(trades_with_causing_order):
     disagreeing = trades_with_causing_order.filter(F.col("flow_ts") != F.col("event_ts"))
     assert disagreeing.count() == 0
+

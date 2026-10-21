@@ -1,7 +1,7 @@
 import csv
 import hashlib
 import re
-from datetime import date, datetime, time, timezone
+from datetime import date, time
 from pathlib import Path
 
 from pyspark.sql import SparkSession
@@ -67,11 +67,11 @@ def read_flow(spark, path):
     )
 
 
+# TIMESTAMP_NTZ: the engine has no clock and no zone, so a zoned timestamp would invent one
 def event_ts_for(session_date):
-    session_open = datetime.combine(date.fromisoformat(session_date), SESSION_OPEN, timezone.utc)
-    # Epoch seconds cast to timestamp: the instant does not depend on the session time zone
-    offset = F.col("message").cast("long") * SECONDS_PER_MESSAGE
-    return (F.lit(int(session_open.timestamp())) + offset).cast("timestamp")
+    session_open = F.to_timestamp_ntz(F.lit(f"{session_date} {SESSION_OPEN}"))
+    offset = F.make_interval(secs=F.col("message").cast("long") * SECONDS_PER_MESSAGE)
+    return session_open + offset
 
 
 def ingest_file(spark, source_file, session_date):
@@ -97,7 +97,9 @@ def ingest_file(spark, source_file, session_date):
 
     # Overwrite only ever replaces a partial batch: committed batches were skipped above
     source_rows.coalesce(1).write.mode("overwrite").parquet(str(target))
-    print(f"ingested {source_file}: {source_rows.count()} rows as batch {batch_id}")
+    # Counted from what landed, and cheap: a Parquet count reads only the file footer
+    written = spark.read.parquet(str(target)).count()
+    print(f"ingested {source_file}: {written} rows as batch {batch_id}")
 
 
 def main():
@@ -107,13 +109,7 @@ def main():
     for path in sorted(set(DATA_DIR.rglob("*.csv")) - listed - {MANIFEST}):
         print(f"skip {path.relative_to(DATA_DIR)}: not in manifest, so it has no session date")
 
-    # Fixed zone: otherwise timestamps display and bucket by whatever zone the machine is in
-    spark = (
-        SparkSession.builder.master("local[*]")
-        .appName("ingest")
-        .config("spark.sql.session.timeZone", "UTC")
-        .getOrCreate()
-    )
+    spark = SparkSession.builder.master("local[*]").appName("ingest").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
 
     for entry in entries:
