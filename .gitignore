@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Pipeline output: rebuilt from data/ on every run
+lake/
+
+# Spark local artefacts
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Editor
+.vscode/
+.idea/
