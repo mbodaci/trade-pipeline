@@ -1,0 +1,2 @@
+# LF on every platform: ingest batch ids hash file bytes, so line endings must not depend on the OS
+* text=auto eol=lf
