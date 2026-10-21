@@ -97,7 +97,7 @@ def ingest_file(spark, source_file, session_date):
 
     # Overwrite only ever replaces a partial batch: committed batches were skipped above
     source_rows.coalesce(1).write.mode("overwrite").parquet(str(target))
-    print(f"ingested {source_file}: {source_rows.count()} rows -> {target.relative_to(ROOT)}")
+    print(f"ingested {source_file}: {source_rows.count()} rows as batch {batch_id}")
 
 
 def main():
