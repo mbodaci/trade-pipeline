@@ -68,7 +68,8 @@ Run the pipeline stages:
 python src/ingest.py
 python src/refine.py
 python src/curate.py
-python src/reconcile.py
+python src/reconcile.py                 # clean run, writes results/reconciliation_clean.md
+python src/reconcile.py --plant-break   # builds lake_broken/, writes reconciliation_break.md
 ```
 
 ## Code style
@@ -122,3 +123,78 @@ trade-pipeline/
 6. Reconciliation: the checks, and the break it caught.
 7. Late and out-of-order data: what breaks, and what I would change.
 8. Limitations.
+
+## Current state (handoff, updated 2026-10-21)
+Read this first when resuming. Update it at the end of every session.
+
+### Built, committed and pushed
+Latest feature commit: `a9d1afb` (README sections 4 and 7). CI green on it. The commit that
+added this section comes after it.
+- `src/ingest.py`: manifest-driven raw layer, all columns as strings, content-hash batch ids,
+  flow message number from row position (`zipWithIndex`).
+- `src/refine.py`: newest batch per source file, regex parse check, rejects kept,
+  `event_ts` derived, partitioned `trade_date=/instrument=`.
+- `src/curate.py`: `traded_volume` (notional and volume per 5-minute window) and
+  `order_lifecycle` (one row per version, `[valid_from, valid_to)`).
+- `src/reconcile.py`: 7 checks per batch per hop, 162 results on the clean lake, planted break
+  via `--plant-break`, both reports committed in `results/`.
+- Tests: 45 in `tests/` (transforms, curate, reconcile). Full suite about 80 s locally, mostly
+  Spark startup and the one-time ingest fixture.
+- CI (`.github/workflows/ci.yml`, ubuntu-24.04): pytest, then the full pipeline and both
+  reconciliations, then `git diff --exit-code results/` so the committed reports must reproduce
+  byte for byte.
+- README: all eight spec sections written; every figure came from a run on this machine.
+
+### Environment facts
+- WSL2 Ubuntu 22.04 only. Native Windows Spark hangs: the Oracle `javapath` java shim points at
+  a removed JRE 1.8, and there is no `hadoop.dll`/`winutils.exe`. Do not create a Windows venv.
+- OpenJDK 17 and Python 3.10 inside WSL. Venv at `.venv/` in the repo (a Linux venv), PySpark
+  3.5.9, pytest 9.1.1.
+- From Git Bash, run WSL commands through a script file:
+  `MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu-22.04 -- bash /mnt/c/.../script.sh`. Inline quoting
+  through PowerShell or `bash -c` breaks.
+- `/etc/hosts` has `127.0.1.1 M1001A`. If the JVM dies with `UnknownHostException`, that line
+  is missing.
+- `lake/` and `lake_broken/` are rebuilt by the pipeline and gitignored, never committed.
+- `.gitattributes` forces LF: batch ids hash file bytes, so line endings are part of identity.
+
+### Open decisions (the user decides next session; do not start either unprompted)
+1. Whether to add two reconciliation checks the experiments exposed as missing: every trade's
+   aggressor is the order at its message (today only in the test suite), and the natural key is
+   unique across batches.
+2. Whether the README's experiments become reproducible (a script producing a third report in
+   `results/`, or tests), or stay described only.
+
+### Half-done or deliberately deferred
+- The seven experiments behind README sections 4 and 7 (rename, decimal price, price x100,
+  swapped trade messages, swapped flow rows, CRLF redelivery, shuffled rows) plus the
+  `mergeSchema` long/double check ran from scripts in the session scratchpad only. Those scripts
+  are not in the repo and will be lost; the README describes each experiment precisely enough
+  to rebuild it.
+- The scripts that measured the 266 self-trade-prevention orders and compared the lifecycle
+  with the order book's reference matcher (`orderbook/tools/analyse.py`) were also scratchpad
+  only. The method is in README section 5.
+- Scoped out by decision: an engine order-event feed, and an explicit message column in the
+  flow. Both are the production fixes named in the README.
+
+### Settled design rules (do not relitigate)
+- Layer boundary: raw holds only what cannot be recovered later (source text, the flow message
+  number, provenance). Anything derivable goes in refine, because raw is immutable and
+  content-hashed, so a derived column there could never be corrected.
+- `event_ts` is `TIMESTAMP_NTZ`: the engine has no clock and no zone. `F.lit(datetime)` is
+  zoned and shifts against NTZ columns, so build NTZ literals with `to_timestamp_ntz` from a
+  string. `date_trunc` returns a zoned type, so use `window` or cast back. Tests run with the
+  session zone set to America/New_York on purpose.
+- Parsing: a regex check, never cast-then-null, because a cast turns `"1.5"` into 1.
+- Partitioning: `trade_date=/instrument=` for refined and curated. Over-partitioned at this
+  size; past a few hundred instruments move to date-only sorted by instrument. Date-first vs
+  instrument-first is about what a reload or delete touches, not pruning.
+- Lifecycle: one version per order per message (time resolution equals message resolution),
+  open intervals null not a sentinel, terminal states get an open final row, orders resting at
+  session end stay open.
+- The 266 self-trade-prevention limit orders (1.2% of limit adds) are a documented gap, not a
+  bug to fix: the outputs cannot show them.
+- `matching_rows` runs on every batch as a check, not only to explain a failed total, because
+  offsetting errors defeat every total.
+- The planted break damages one raw batch in `lake_broken/` (message 93 dropped, one quantity
+  zeroed, `_SUCCESS` left in place). Nothing corrupted lives in `data/`.
