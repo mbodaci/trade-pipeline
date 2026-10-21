@@ -160,8 +160,62 @@ all batches with `mergeSchema`, so sessions 01 and 02 read it as null.
 The venue is constant per file because it labels the engine run, not each trade. It demonstrates
 a nullable column arriving in a later batch; it is not multi-venue matching.
 
-The rest of this section, on renames and type changes, is written with the schema evolution
-stage.
+Adding a nullable column is safe here because nothing downstream depends on it. Renaming and
+retyping are not. I ran both against a copy of `data/` and pushed it through the whole
+pipeline and the reconciliation; the figures below come from those runs.
+
+### Renaming a column
+
+Experiment: session 03's AAPL trades file with `quantity` renamed to `qty`.
+
+- **Ingest accepts it silently.** Raw reads columns by header name and does not check the
+  header against an expected list, so the batch lands with a `qty` column and no `quantity`.
+- **Refine produces nulls, not rejects.** Reading all batches with `mergeSchema` gives both
+  columns: older batches have `qty` null, the renamed batch has `quantity` null. Refine treats a
+  null as an empty field, not a parse failure (a cancel's price is legitimately empty), so all
+  1,183 trades reached refined with a null quantity and 0 rejects.
+- **Curated is wrong without an error.** That session's `traded_volume` has a null volume
+  beside a trade count of 1,183.
+- **Reconciliation stops rather than reports.** It reads the source file by column name and
+  raised `KeyError: 'quantity'`. That halts the run loudly, but only after the lake has been
+  written, and it produces no report saying which batch broke.
+
+How I would handle it in production (not built here):
+
+- Check each file's header against a contract at ingest, and quarantine a file that is missing
+  a required column instead of landing it.
+- Give refine nullability rules per column. A trade's quantity is required; a flow row's price
+  may be null only for a cancel or a market order. Today a required column that is entirely
+  null passes.
+- Map renames explicitly, keyed by a schema version recorded per file in the manifest, and apply
+  the mapping in refine. Raw keeps the file as written, and because refine is rebuilt from raw on
+  every run, adding a mapping corrects every affected batch on the next run.
+
+### Changing a column's type
+
+Experiment: session 03's GOOG trades with prices written as decimal dollars (`1000.02`) instead
+of integer ticks (`100002`).
+
+- **Raw absorbs it,** because every raw column is a string. That matters: a raw layer with
+  inferred types would not even be readable. A Parquet table with `price` as a long in one batch
+  and a double in another made Spark's `mergeSchema` read fail outright (tested separately).
+- **Refine rejects the whole batch.** `1000.02` fails the integer check, so all 1,178 trades went
+  to `rejects/` and that session-instrument vanished from refined and curated.
+- **Reconciliation catches it,** but with only one check: `rejected_rows` failed with 1,178. The
+  refined-to-curated checks for that batch pass, because both sides are empty.
+
+A type change that still parses is worse. Experiment: session 03's MSFT prices multiplied by 100,
+still integers. Every check passed. Source and lake agree, and every value parses, so a
+source-to-output reconciliation has nothing to compare against; only knowing what a price should
+look like would catch it.
+
+How I would handle it in production (not built here):
+
+- Version the parser: record the schema version per file in the manifest and have refine convert
+  each version to the canonical type, for example decimal dollars to integer ticks, failing if
+  the conversion is not exact. Raw already holds the batch, so no re-ingest is needed.
+- Make the producer declare units in the contract, and add plausibility checks a reconciliation
+  cannot provide, such as prices within a band of the previous session's.
 
 ## 5. Temporal modelling: how history is kept
 
@@ -319,7 +373,79 @@ The session date is assigned per batch from the manifest, not from the ingest da
 ingest date would conflate event time with processing time: a session replayed or delivered a
 day late would land in the wrong partition. That is the bug this section is about.
 
-The rest of this section is not yet written.
+### The concrete case: two trades with their sequence numbers swapped
+
+Experiment: in session 01's AAPL trades, the trades at messages 1 and 3 had their message numbers
+exchanged (`1,2,1,99987,16` became `3,2,1,99987,16`, and `3,4,3,100002,63` became
+`1,4,3,100002,63`), then the copy went through the whole pipeline.
+
+What broke:
+
+- **Event time.** `event_ts` is derived from the message number, so each trade is stamped with
+  the other's time.
+- **Validity bounds.** A fill opens a new version of its order at the fill's message, so the
+  versions now open at the wrong moments, in the wrong order. One trade now comes before its own
+  orders were added. Measured: the lifecycle lost 142 units of fill quantity against the trades.
+  Traced through the code, not measured: `order_versions` skips any event for an order it has
+  not seen added, so 126 of those units are fills that now precede their orders' adds, leaving
+  those orders open with quantity they no longer have; the other 16 are a fill landing on a
+  market order that had already finished, which opens no new version.
+- **Running aggregates.** Anything accumulated in message order, such as an order's remaining
+  quantity, is computed in the wrong order. The 5-minute volume happened to be unaffected,
+  because both trades stayed in the same interval; a swap across an interval boundary would
+  move volume between intervals (reasoning, not tested).
+
+What caught it: only `lifecycle_fills`, expected 58,996 and found 58,854. Row counts, totals and
+row-level matching all passed, because the source file itself carried the swap, so source and
+lake agree. The direct symptom, a trade whose aggressor is not the order at its message, was
+present for both trades, but that check exists only in the test suite, not in `reconcile.py`.
+
+The flow is more fragile than the trades. Its sequence number is not a column but the row's
+position, so swapping two flow rows (session 02, AAPL, messages 11 and 17) swaps their message
+numbers too. Source and raw still agree, because both number rows by position. Again only
+`lifecycle_fills` noticed: expected 59,660, found 59,646.
+
+### What I would change, against what the pipeline already does
+
+**Order by sequence number within each key.** Already done for anything derived from the
+trades. The lifecycle sorts each order's events by message, not by arrival, and volume is an
+order-independent sum. Tested: with every row of a trades file shuffled, that session's 5,577
+lifecycle versions and 17 volume intervals were identical to the clean run, and all 162 checks
+passed. Arrival order within a file does not matter. What it cannot fix is a wrong sequence
+number, as above, and the flow has no sequence number of its own. The fix there is upstream:
+the engine should write the message number as a column, which would also let a reconciliation
+check it.
+
+**Hold late arrivals until a watermark passes.** Not done, and not needed in the current design
+(reasoning, not tested): every run rebuilds refined and curated from all of raw, so a late file
+for an old session is simply included next time, in the right partition, because its date comes
+from the manifest. The cost is that nothing is ever final: a curated figure can change after it
+was published, without notice, and the full rebuild does not scale. An incremental design would
+need a rule for when a session is complete, and the engine emits no end-of-session marker. A
+late flow file would also break the positional message numbering, which restarts at 0 in every
+file.
+
+**Make the write idempotent so a replay does not double count.** Half done. Ingest is
+idempotent by content hash: re-running it on unchanged files skipped all 18 batches (tested).
+That protects against an exact replay. It does not protect against the same data delivered with
+different bytes. Experiment: session 01's GOOG trades delivered again with CRLF line endings in a
+new folder, listed in the manifest with the same date. The hash differed, so it became a second
+batch; refine keeps the newest batch per source file, and the paths differ, so both were kept.
+Refined and curated doubled, from 1,247 trades to 2,494.
+
+Reconciliation did flag it, but only by accident: curated totals are per session and instrument,
+while each batch expects only its own rows, so the refined-to-curated checks failed for both
+files. Every source-to-raw and raw-to-refined check passed, because each file on its own was
+carried faithfully. The changes I would make:
+
+- deduplicate in refine on the natural key, `(trade_date, instrument, message, passive_id)` for
+  trades, with an explicit rule for conflicting duplicates;
+- add a reconciliation check that the natural key is unique across batches, and one that every
+  trade's aggressor is the order at its message, moving that check from the tests into
+  `reconcile.py`.
+
+Refine and curate overwrite their outputs in full, so re-running them cannot double count:
+two builds from scratch produced byte-identical reconciliation reports.
 
 ## 8. Limitations
 
@@ -328,6 +454,11 @@ The rest of this section is not yet written.
 - Reconciliation collects each batch's rows into Python to compare them. That is fine at a few
   thousand rows per batch; at scale the totals would run first in Spark and the row-level
   comparison would be a keyed join.
+- A unit change that still parses, such as prices scaled by 100, passes every check (section 4).
+- The flow's sequence number is its row position, so swapped or late flow rows get the wrong
+  message numbers, and only `lifecycle_fills` notices (section 7).
+- A redelivery with different bytes is double counted; nothing deduplicates on the natural key
+  (section 7).
 - Venue is a per-run label, not a property of each trade.
 - Each source file holds exactly one instrument and one session.
 - Local Spark only: no cluster, no orchestration, no streaming, no cloud storage.
