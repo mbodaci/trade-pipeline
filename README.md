@@ -17,6 +17,8 @@ pytest -v
 python src/ingest.py
 python src/refine.py
 python src/curate.py
+python src/reconcile.py                 # writes results/reconciliation_clean.md
+python src/reconcile.py --plant-break   # writes results/reconciliation_break.md
 ```
 
 ## 1. What it does, and where the data comes from
@@ -224,7 +226,92 @@ state from side effects. It was scoped out of this project.
 
 ## 6. Reconciliation: the checks, and the break it caught
 
-Not yet written.
+`reconcile.py` compares every source file with what each layer made of it, one result per batch
+per hop (source to raw, raw to refined, refined to curated), so a break shows where it entered.
+
+The source side is read with Python's `csv` module, not Spark. A reconciliation that reads
+through the path it is checking shares that path's bugs: if Spark's CSV reader or the ingest
+dropped a row, a check that also read the CSV through Spark would agree with it.
+
+| Check | Compares |
+|---|---|
+| `row_count` | source vs raw; raw vs refined plus rejects; refined vs curated trade count |
+| `traded_quantity` | total traded quantity at every hop |
+| `matching_rows` | every row by key, `(message, passive_id)` for trades, `message` for flow |
+| `rejected_rows` | rows refine could not parse, which must be zero |
+| `positive_quantity` | no zero or negative quantities in refined |
+| `order_ids_exist` | each trade's aggressor and passive order was added in that session's flow |
+| `lifecycle_fills` | final fills in the order lifecycle are twice the traded volume |
+
+### Totals detect, rows explain
+
+Counts and sums are cheap, and in production they are often all an upstream system provides,
+but offsetting errors defeat them: one quantity inflated by 2 and another deflated by 2 leaves
+both the row count and the total unchanged. Comparing rows by key catches that, and also says
+exactly which rows are missing, extra or different. A test plants that offsetting error and
+asserts that every total passes and only the row-level check fails.
+
+### The planted break
+
+A break has to enter between source and output to be a reconciliation break. Corrupting a
+source file would not show one: the pipeline would carry the corrupted file faithfully, source
+and lake would agree, and only the validity checks could notice.
+
+So `python src/reconcile.py --plant-break` builds a separate lake, `lake_broken/`, from the same
+source files, and damages one raw batch after ingest and before refine. Nothing corrupted is
+committed to `data/`, and the pipeline stages contain no test hooks. Tampering with stored data
+is less common in practice than a transform bug, but it stands in for a partial write or a bad
+reprocess, and what matters is that the damage lands between source and output.
+
+The damage, to `session_02/trades_MSFT.csv` (2026-10-20):
+
+- the three fills of message 93 are dropped: a market sell for 44 that swept three bids;
+- the quantity of the trade at message 30, passive_id 7, is set from 38 to 0;
+- the batch's `_SUCCESS` marker is left in place. To ingest, the batch still looks committed:
+  `_SUCCESS` proves a write finished, not that what it wrote is right.
+
+What the checks found, without being told what was planted
+([full report](results/reconciliation_break.md)):
+
+| Check | Hop | Expected | Found |
+|---|---|---|---|
+| `row_count` | source to raw | 1,187 | 1,184 |
+| `traded_quantity` | source to raw | 30,505 | 30,423 |
+| `matching_rows` | source to raw | 0 | 4: message 93's three fills missing, quantity 38 now 0 |
+| `positive_quantity` | refined | 0 | 1 |
+
+Every hop after raw passes, because refine and curate carried the damage faithfully. That is
+what places the break in the raw batch rather than in a transform. The other 158 checks pass.
+
+### Reproducing it
+
+Both reports in `results/` contain no timestamps or run-specific values, so a re-run produces
+byte-identical files. CI runs the whole pipeline, both reconciliations, and
+`git diff --exit-code results/`: if a fresh run does not reproduce the committed reports, the
+build fails. A test also plants the same break on every push and asserts the exact four
+failures and the four row-level differences.
+
+### Are the checks load-bearing?
+
+I disabled each check in turn and re-ran the planted break. No single disabled check lets it
+through: the dropped rows are seen by `row_count`, `traded_quantity` and `matching_rows`, and the
+zeroed quantity by `traded_quantity`, `matching_rows` and `positive_quantity`. The smallest set of
+disabled checks that lets the whole break pass undetected is those four together.
+
+The planted break therefore cannot show that each check matters on its own. What can is a
+failure that only one check catches, and there is one for every check:
+
+| Check | Failure no other check catches |
+|---|---|
+| `matching_rows` | offsetting errors: one quantity +2, another -2 |
+| `positive_quantity` | a zero quantity emitted by the engine itself, so source and lake agree |
+| `rejected_rows` | an unparseable value emitted by the engine itself |
+| `order_ids_exist` | a trade against an order that was never added |
+| `traded_quantity` | curated volume disagreeing with refined |
+| `row_count` | curated trade count disagreeing with refined |
+| `lifecycle_fills` | lifecycle fills not equal to twice the traded volume |
+
+Each row is a test that asserts exactly one check fails.
 
 ## 7. Late and out-of-order data: what breaks, and what I would change
 
@@ -238,6 +325,9 @@ The rest of this section is not yet written.
 
 - The order lifecycle cannot see self-trade prevention: 266 limit orders appear to rest after
   the engine removed them (section 5).
+- Reconciliation collects each batch's rows into Python to compare them. That is fine at a few
+  thousand rows per batch; at scale the totals would run first in Spark and the row-level
+  comparison would be a keyed join.
 - Venue is a per-run label, not a property of each trade.
 - Each source file holds exactly one instrument and one session.
 - Local Spark only: no cluster, no orchestration, no streaming, no cloud storage.

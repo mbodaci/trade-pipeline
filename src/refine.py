@@ -22,9 +22,9 @@ SESSION_OPEN = time(9, 30)
 SECONDS_PER_MESSAGE = 1
 
 
-def read_raw(spark, entity):
+def read_raw(spark, raw_dir, entity):
     # mergeSchema: batches from before the venue column existed are read with venue as null
-    return spark.read.option("mergeSchema", True).parquet(str(RAW_DIR / entity))
+    return spark.read.option("mergeSchema", True).parquet(str(raw_dir / entity))
 
 
 # A corrected manifest date or a regenerated file creates a new batch for the same source file.
@@ -65,8 +65,8 @@ def event_ts():
     return session_open + offset
 
 
-def refine_entity(spark, entity):
-    raw = read_raw(spark, entity)
+def refine_entity(spark, entity, raw_dir=RAW_DIR, refined_dir=REFINED_DIR):
+    raw = read_raw(spark, raw_dir, entity)
     latest = latest_batches(raw)
     columns = INTEGER_COLUMNS[entity]
     failed = unparseable(columns)
@@ -86,12 +86,12 @@ def refine_entity(spark, entity):
         refined.repartition(*PARTITION_COLUMNS)
         .write.mode("overwrite")
         .partitionBy(*PARTITION_COLUMNS)
-        .parquet(str(REFINED_DIR / entity))
+        .parquet(str(refined_dir / entity))
     )
-    rejects.coalesce(1).write.mode("overwrite").parquet(str(REFINED_DIR / "rejects" / entity))
+    rejects.coalesce(1).write.mode("overwrite").parquet(str(refined_dir / "rejects" / entity))
 
-    written = spark.read.parquet(str(REFINED_DIR / entity)).count()
-    rejected = spark.read.parquet(str(REFINED_DIR / "rejects" / entity)).count()
+    written = spark.read.parquet(str(refined_dir / entity)).count()
+    rejected = spark.read.parquet(str(refined_dir / "rejects" / entity)).count()
     superseded = raw.count() - latest.count()
     print(
         f"{entity}: {written} refined, {rejected} rejected, "

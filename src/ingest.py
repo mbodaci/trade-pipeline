@@ -63,11 +63,11 @@ def read_flow(spark, path):
     )
 
 
-def ingest_file(spark, source_file, session_date):
+def ingest_file(spark, source_file, session_date, raw_dir=RAW_DIR):
     path = DATA_DIR / source_file
     entity, instrument = parse_source_name(path.name)
     batch_id = batch_id_for(path, session_date)
-    target = RAW_DIR / entity / f"batch_id={batch_id}"
+    target = raw_dir / entity / f"batch_id={batch_id}"
 
     # _SUCCESS is written last by Spark's commit, so its absence means no batch or a partial one
     if (target / "_SUCCESS").exists():

@@ -28,3 +28,13 @@ jobs:
         run: pip install -r requirements.txt
       - name: Test
         run: pytest -v
+      - name: Run the pipeline and both reconciliations
+        run: |
+          python src/ingest.py
+          python src/refine.py
+          python src/curate.py
+          python src/reconcile.py
+          python src/reconcile.py --plant-break
+      # The committed reports are evidence only if a fresh run reproduces them byte for byte
+      - name: Reports match the committed ones
+        run: git diff --exit-code results/

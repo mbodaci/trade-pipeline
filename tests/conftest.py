@@ -18,33 +18,37 @@ def spark():
         .config("spark.sql.shuffle.partitions", 4)
         .getOrCreate()
     )
-    # pytest's pythonpath reaches only this process; the Python workers Spark starts import
-    # curate when they unpickle order_versions, so the module has to be shipped to them
-    session.sparkContext.addPyFile(curate.__file__)
     yield session
     session.stop()
 
 
-# Ingest every manifest entry once per test run, into a temporary lake, never into lake/
+# One temporary lake per test run, laid out like lake/, so the tests never touch lake/ itself
 @pytest.fixture(scope="session")
-def raw_dir(spark, tmp_path_factory):
-    raw_dir = tmp_path_factory.mktemp("raw")
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(ingest, "RAW_DIR", raw_dir)
-        for entry in ingest.read_manifest():
-            ingest.ingest_file(spark, entry["source_file"], entry["session_date"])
+def lake_dir(tmp_path_factory):
+    return tmp_path_factory.mktemp("lake")
+
+
+@pytest.fixture(scope="session")
+def raw_dir(spark, lake_dir):
+    raw_dir = lake_dir / "raw"
+    for entry in ingest.read_manifest():
+        ingest.ingest_file(spark, entry["source_file"], entry["session_date"], raw_dir)
     return raw_dir
 
 
 @pytest.fixture(scope="session")
-def refined_dir(spark, raw_dir, tmp_path_factory):
-    refined_dir = tmp_path_factory.mktemp("refined")
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(refine, "RAW_DIR", raw_dir)
-        patch.setattr(refine, "REFINED_DIR", refined_dir)
-        for entity in refine.INTEGER_COLUMNS:
-            refine.refine_entity(spark, entity)
+def refined_dir(spark, lake_dir, raw_dir):
+    refined_dir = lake_dir / "refined"
+    for entity in refine.INTEGER_COLUMNS:
+        refine.refine_entity(spark, entity, raw_dir, refined_dir)
     return refined_dir
+
+
+@pytest.fixture(scope="session")
+def curated_dir(spark, lake_dir, refined_dir):
+    curated_dir = lake_dir / "curated"
+    curate.curate_lake(spark, refined_dir, curated_dir)
+    return curated_dir
 
 
 @pytest.fixture(scope="session")
@@ -70,17 +74,6 @@ def flow_refined(spark, refined_dir):
 @pytest.fixture(scope="session")
 def trades_refined(spark, refined_dir):
     return spark.read.parquet(str(refined_dir / "trades"))
-
-
-@pytest.fixture(scope="session")
-def curated_dir(spark, flow_refined, trades_refined, tmp_path_factory):
-    curated_dir = tmp_path_factory.mktemp("curated")
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(curate, "CURATED_DIR", curated_dir)
-        curate.write_partitioned(curate.traded_volume(trades_refined), "traded_volume")
-        lifecycle = curate.order_lifecycle(spark, flow_refined, trades_refined)
-        curate.write_partitioned(lifecycle, "order_lifecycle")
-    return curated_dir
 
 
 @pytest.fixture(scope="session")

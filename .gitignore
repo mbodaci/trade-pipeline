@@ -6,6 +6,7 @@ __pycache__/
 
 # Pipeline output: rebuilt from data/ on every run
 lake/
+lake_broken/
 
 # Spark local artefacts
 spark-warehouse/

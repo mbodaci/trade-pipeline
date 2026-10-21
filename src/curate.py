@@ -154,6 +154,9 @@ def order_versions(events):
 
 
 def order_lifecycle(spark, flow, trades):
+    # Spark's Python workers import this module to unpickle order_versions; when curate is
+    # imported by another script or by the tests, it is not on their path unless shipped
+    spark.sparkContext.addPyFile(__file__)
     event_fields = ["message", "event_ts", "request", "side", "price", "quantity", "order_type",
                     "filled"]
     # sort_array orders structs by their first field, message, so each order's events are in order
@@ -169,27 +172,31 @@ def order_lifecycle(spark, flow, trades):
     return spark.createDataFrame(versions, LIFECYCLE_SCHEMA)
 
 
-def write_partitioned(rows, name):
+def write_partitioned(rows, path):
     (
         rows.repartition(*PARTITION_COLUMNS)
         .write.mode("overwrite")
         .partitionBy(*PARTITION_COLUMNS)
-        .parquet(str(CURATED_DIR / name))
+        .parquet(str(path))
     )
+
+
+def curate_lake(spark, refined_dir=REFINED_DIR, curated_dir=CURATED_DIR):
+    flow = spark.read.parquet(str(refined_dir / "flow"))
+    trades = spark.read.parquet(str(refined_dir / "trades"))
+
+    write_partitioned(traded_volume(trades), curated_dir / "traded_volume")
+    write_partitioned(order_lifecycle(spark, flow, trades), curated_dir / "order_lifecycle")
+
+    for name in ("traded_volume", "order_lifecycle"):
+        print(f"{name}: {spark.read.parquet(str(curated_dir / name)).count()} rows")
 
 
 def main():
     spark = SparkSession.builder.master("local[*]").appName("curate").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
 
-    flow = spark.read.parquet(str(REFINED_DIR / "flow"))
-    trades = spark.read.parquet(str(REFINED_DIR / "trades"))
-
-    write_partitioned(traded_volume(trades), "traded_volume")
-    write_partitioned(order_lifecycle(spark, flow, trades), "order_lifecycle")
-
-    for name in ("traded_volume", "order_lifecycle"):
-        print(f"{name}: {spark.read.parquet(str(CURATED_DIR / name)).count()} rows")
+    curate_lake(spark)
 
     spark.stop()
 
