@@ -16,6 +16,7 @@ pip install -r requirements.txt
 pytest -v
 python src/ingest.py
 python src/refine.py
+python src/curate.py
 ```
 
 ## 1. What it does, and where the data comes from
@@ -52,7 +53,7 @@ command. A file not in the manifest is reported and skipped, because it has no d
 |---|---|---|
 | raw | source as written, plus what cannot be recovered later | once per file, never rewritten |
 | refined | typed, validated rows with derived columns | rebuilt from raw on every run |
-| curated | aggregates for use | rebuilt from refined |
+| curated | traded volume per interval, order lifecycle | rebuilt from refined |
 
 ### Raw holds only what cannot be recovered later
 
@@ -114,13 +115,28 @@ invent information the data does not have: the same instant would display as 09:
 - NTZ survives a Parquet round trip as `TimestampNTZType`.
 
 The tests run with the session zone set to America/New_York on purpose: they pass only if
-nothing depends on the zone.
+nothing depends on the zone. That setting caught a real trap. `F.lit(datetime(...))` in
+PySpark makes a zoned timestamp, and comparing it with an NTZ column shifts it by the session
+zone, so an as-of query for 09:30:40 silently asked about a different moment. Literals compared
+with NTZ columns are built with `to_timestamp_ntz` from the wall-clock string instead.
+
+### Curated: volume and VWAP
+
+`traded_volume` holds trade count, volume and notional (the sum of price × quantity, exact in
+integer ticks) per instrument per 5-minute interval, bucketed with `window`. Intervals with no
+trades produce no row rather than a zero row.
+
+It stores notional and volume, not VWAP. VWAP is not additive across intervals: the VWAP of an
+hour is not the average of its twelve 5-minute VWAPs, so storing only the ratio makes every
+longer-period rollup wrong. The two totals sum correctly over any period, and VWAP is
+`sum(notional) / sum(volume)` over whatever intervals a query selects. A test checks that the
+interval totals re-aggregate to each whole session.
 
 ## 3. Partitioning: the choice and the trade-off
 
-Refined tables are partitioned `trade_date=/instrument=`, one file per partition (rows are
-repartitioned by the partition columns before the write, so each partition gets one file rather
-than one per task).
+Refined and curated tables are partitioned `trade_date=/instrument=`, one file per partition
+(rows are repartitioned by the partition columns before the write, so each partition gets one
+file rather than one per task).
 
 At this data size that is over-partitioned. Each session-instrument partition holds roughly
 1,100 to 1,250 trades, and every file is small. Past a few hundred instruments I would move to
@@ -147,7 +163,64 @@ stage.
 
 ## 5. Temporal modelling: how history is kept
 
-Not yet written.
+`order_lifecycle` keeps every order's history as versions, one row per version, each with
+stored validity bounds. An as-of query asks which version was valid at a moment *t*. Computing
+bounds at query time with `lead()` was rejected: the spec asks for records that carry their
+bounds, and bounds computed per query do not exist in the data.
+
+Each version holds the order's state (`placed`, `partially_filled`, `filled`, `cancelled`), its
+price, remaining and filled quantity, and `[valid_from, valid_to)`. Order 22 (AAPL, 2026-10-19)
+rests at message 36, is filled by a market order at message 46, and is the target of a cancel at
+message 62:
+
+| state | remaining | filled | valid_from | valid_to |
+|---|---|---|---|---|
+| placed | 15 | 0 | 09:30:36 | 09:30:46 |
+| filled | 0 | 15 | 09:30:46 | null |
+
+The cancel produces nothing: the order was already filled, so the engine rejected it.
+
+### The rules
+
+- **Half-open bounds.** A version closes when the order's next version opens, so two adjacent
+  versions never both match the same moment.
+- **Terminal states get a final row, open-ended.** "Filled at 10:00" returns a row, so filled is
+  distinguishable from never existed.
+- **Orders still resting at session end stay open.** The engine has no session close, and
+  closing them with an invented "expired" state would fabricate a transition. Order ids restart
+  each session, so the key is `(trade_date, instrument, order_id)`.
+- **Open intervals are null, not `9999-12-31`.** The sentinel would make queries simpler but
+  stores a date that is not true. The accepted cost is that every as-of query is written
+  `valid_from <= t AND (valid_to IS NULL OR t < valid_to)`.
+- **One version per order per message** that changes its state, price or remaining quantity.
+  When a market order sweeps three resting orders, its three fills share one message and make one
+  version, not three. This is correct because time resolution equals message resolution: one
+  message is one second, so versions inside a message would have zero-length intervals that no
+  query can return. With sub-message timestamps, one version per fill would be right.
+- **A cancel or modify takes effect only if the order is still resting** by its own fills. The
+  engine rejects the rest and emits nothing, so the rule is inferred from what the outputs show.
+
+The state machine is a plain Python function over one order's sorted messages, because a modify
+resets the remaining quantity rather than subtracting from it, and whether a request applies
+depends on the state at that moment. Spark groups each order's events; the function replays them.
+
+### What the outputs cannot show
+
+The lifecycle is inferred from the flow and the trades, and neither records what the engine
+refused or removed. Self-trade prevention discards an incoming order's remainder without a trace
+in either file. Replaying all nine flows through the order book's independent reference matcher
+measured the gap: 266 limit orders (1.2% of 22,725 limit adds) were removed that way, 223 on
+arrival and 43 when a modify re-entered them. The lifecycle shows them still resting. Downstream,
+130 cancels and 64 modifies sent to those orders, which the engine rejected, are treated as
+applied.
+
+Everywhere else the inference is exact. Comparing each of the 27,130 orders' version history
+with the reference book's state after every message: 26,864 are identical, and all 266 that
+differ are self-trade-prevention orders. None differ for any other reason.
+
+The production fix is for the engine to publish order events (accepted, rested, cancelled,
+rejected, removed by self-trade prevention), so the lifecycle reads facts rather than inferring
+state from side effects. It was scoped out of this project.
 
 ## 6. Reconciliation: the checks, and the break it caught
 
@@ -159,10 +232,12 @@ The session date is assigned per batch from the manifest, not from the ingest da
 ingest date would conflate event time with processing time: a session replayed or delivered a
 day late would land in the wrong partition. That is the bug this section is about.
 
-The rest of this section is written with the curated layer.
+The rest of this section is not yet written.
 
 ## 8. Limitations
 
+- The order lifecycle cannot see self-trade prevention: 266 limit orders appear to rest after
+  the engine removed them (section 5).
 - Venue is a per-run label, not a property of each trade.
 - Each source file holds exactly one instrument and one session.
 - Local Spark only: no cluster, no orchestration, no streaming, no cloud storage.

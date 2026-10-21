@@ -2,6 +2,7 @@ import pytest
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
+import curate
 import ingest
 import refine
 
@@ -17,6 +18,9 @@ def spark():
         .config("spark.sql.shuffle.partitions", 4)
         .getOrCreate()
     )
+    # pytest's pythonpath reaches only this process; the Python workers Spark starts import
+    # curate when they unpickle order_versions, so the module has to be shipped to them
+    session.sparkContext.addPyFile(curate.__file__)
     yield session
     session.stop()
 
@@ -66,3 +70,24 @@ def flow_refined(spark, refined_dir):
 @pytest.fixture(scope="session")
 def trades_refined(spark, refined_dir):
     return spark.read.parquet(str(refined_dir / "trades"))
+
+
+@pytest.fixture(scope="session")
+def curated_dir(spark, flow_refined, trades_refined, tmp_path_factory):
+    curated_dir = tmp_path_factory.mktemp("curated")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(curate, "CURATED_DIR", curated_dir)
+        curate.write_partitioned(curate.traded_volume(trades_refined), "traded_volume")
+        lifecycle = curate.order_lifecycle(spark, flow_refined, trades_refined)
+        curate.write_partitioned(lifecycle, "order_lifecycle")
+    return curated_dir
+
+
+@pytest.fixture(scope="session")
+def lifecycle(spark, curated_dir):
+    return spark.read.parquet(str(curated_dir / "order_lifecycle"))
+
+
+@pytest.fixture(scope="session")
+def traded_volume(spark, curated_dir):
+    return spark.read.parquet(str(curated_dir / "traded_volume"))
