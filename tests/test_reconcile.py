@@ -1,4 +1,5 @@
 import shutil
+from collections import Counter
 
 import pytest
 
@@ -17,8 +18,14 @@ def with_quantity(row, quantity):
     return row[:4] + (quantity,)
 
 
-# A batch every layer carried faithfully, unless a test overrides one layer
-def trades_batch(raw=None, rejected=(), refined=None, curated=None, order_ids=None):
+# The flow orders at messages 1 and 2, which are the aggressors in TRADES
+ORDER_AT_MESSAGE = {1: 11, 2: 12}
+
+
+# A batch every layer carried faithfully, unless a test overrides one layer. Alone in its
+# session unless key_counts says otherwise.
+def trades_batch(raw=None, rejected=(), refined=None, curated=None, order_ids=None,
+                 order_at_message=ORDER_AT_MESSAGE, key_counts=None):
     raw = list(TRADES) if raw is None else raw
     if refined is None:
         refined = [reconcile.as_refined("trades", row) for row in raw if row not in rejected]
@@ -29,6 +36,9 @@ def trades_batch(raw=None, rejected=(), refined=None, curated=None, order_ids=No
         "session_01/trades_TEST.csv", "trades", "2026-10-19", "TEST",
         source=list(TRADES), raw=raw, rejected=list(rejected), refined=refined, curated=curated,
         order_ids={9, 10, 11, 12} if order_ids is None else order_ids,
+        order_at_message=order_at_message,
+        key_counts=(Counter(reconcile.row_key("trades", row) for row in refined)
+                    if key_counts is None else key_counts),
     )
 
 
@@ -98,6 +108,25 @@ def test_order_ids_exist_catches_a_trade_against_an_order_never_added():
     assert failures(batch, [reconcile.check_order_ids]) == {("order_ids_exist", REFINED)}
 
 
+def test_aggressor_at_message_catches_a_trade_whose_message_holds_another_order():
+    batch = trades_batch(order_at_message={1: 11, 2: 9})
+    results = reconcile.run_checks([batch], [reconcile.check_aggressor_at_message])
+    assert [(r.check, r.found, r.details) for r in results] == [(
+        "aggressor_at_message", 2, (
+            "message 2, passive_id 9: aggressor 12, flow has order 9",
+            "message 2, passive_id 10: aggressor 12, flow has order 9",
+        ),
+    )]
+
+
+def test_natural_key_unique_catches_a_trade_also_in_another_batch():
+    batch = trades_batch(key_counts=Counter({(1, 10): 2, (2, 10): 1, (2, 9): 1}))
+    results = reconcile.run_checks([batch], [reconcile.check_natural_key_unique])
+    assert [(r.check, r.found, r.details) for r in results] == [
+        ("natural_key_unique", 1, ("message 1, passive_id 10: 2 rows in the session",))
+    ]
+
+
 def test_lifecycle_fills_catches_fills_that_do_not_match_twice_the_volume():
     batch = trades_batch(curated={"trade_count": 3, "volume": 15, "lifecycle_filled": 29})
     assert failures(batch, [reconcile.check_lifecycle_fills]) == {
@@ -121,6 +150,9 @@ ONLY_CATCHER = {
     "positive_quantity": emitted_by_engine([with_quantity(TRADES[0], "0")] + TRADES[1:]),
     "rejected_rows": emitted_by_engine([UNPARSEABLE] + TRADES[1:], rejected=[UNPARSEABLE]),
     "order_ids_exist": trades_batch(order_ids={10, 11, 12}),
+    "aggressor_at_message": trades_batch(order_at_message={1: 11, 2: 9}),
+    # A line the engine wrote twice: matching_rows compares by key, so it cannot see the copy
+    "natural_key_unique": emitted_by_engine(TRADES + [TRADES[0]]),
     "traded_quantity": trades_batch(curated={"trade_count": 3, "volume": 14,
                                              "lifecycle_filled": 30}),
     "row_count": trades_batch(curated={"trade_count": 2, "volume": 15, "lifecycle_filled": 30}),

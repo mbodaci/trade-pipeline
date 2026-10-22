@@ -3,6 +3,7 @@ import csv
 import re
 import shutil
 import sys
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -60,7 +61,8 @@ class Result:
 
 
 # One source file as it appears in every layer. Rows are tuples in FIELDS order: strings in
-# source and raw, integers where refine parses them in refined.
+# source and raw, integers where refine parses them in refined. The last three fields describe
+# the batch's session as a whole, which some checks need and no single batch holds.
 @dataclass
 class Batch:
     source_file: str
@@ -73,6 +75,8 @@ class Batch:
     refined: list
     curated: dict = field(default_factory=dict)
     order_ids: set = field(default_factory=set)
+    order_at_message: dict = field(default_factory=dict)
+    key_counts: Counter = field(default_factory=Counter)
 
 
 def parse_int(value):
@@ -206,6 +210,37 @@ def check_order_ids(batch):
     return [Result("order_ids_exist", REFINED, batch.source_file, 0, len(orphans), details)]
 
 
+# The flow row at a trade's message is the order that caused it, so it must be the aggressor.
+# The only check on the flow's message numbers, which source and raw agree on by construction.
+def check_aggressor_at_message(batch):
+    if batch.entity != "trades":
+        return []
+    mismatched = sorted(
+        (row for row in batch.refined if batch.order_at_message.get(row[0]) != row[1]),
+        key=lambda row: sort_key(row_key("trades", row)),
+    )
+    details = tuple(
+        f"{describe_key('trades', row_key('trades', row))}: aggressor {row[1]}, "
+        + (f"flow has order {batch.order_at_message[row[0]]}"
+           if row[0] in batch.order_at_message else "no flow row")
+        for row in mismatched
+    )
+    return [Result("aggressor_at_message", REFINED, batch.source_file, 0, len(mismatched),
+                   details)]
+
+
+# Counted across the whole session, so a row delivered again in another file is seen, and so is
+# a duplicate within one file, which matching_rows cannot see because it compares rows by key
+def check_natural_key_unique(batch):
+    duplicated = [row for row in batch.refined
+                  if batch.key_counts[row_key(batch.entity, row)] > 1]
+    details = tuple(
+        f"{describe_key(batch.entity, key)}: {batch.key_counts[key]} rows in the session"
+        for key in sorted({row_key(batch.entity, row) for row in duplicated}, key=sort_key)
+    )
+    return [Result("natural_key_unique", REFINED, batch.source_file, 0, len(duplicated), details)]
+
+
 # Each trade fills one aggressor and one passive order, so final fills are twice the volume
 def check_lifecycle_fills(batch):
     if batch.entity != "trades":
@@ -221,6 +256,8 @@ CHECKS = [
     check_rejected_rows,
     check_positive_quantity,
     check_order_ids,
+    check_aggressor_at_message,
+    check_natural_key_unique,
     check_lifecycle_fills,
 ]
 
@@ -309,13 +346,20 @@ def load_batches(spark, lake_dir):
         ))
 
     # A trade's order ids must be orders added in the same session's flow
-    added = {
-        (batch.trade_date, batch.instrument): {row[2] for row in batch.refined if row[1] == "add"}
-        for batch in batches if batch.entity == "flow"
-    }
+    flows = {(batch.trade_date, batch.instrument): batch.refined
+             for batch in batches if batch.entity == "flow"}
+    key_counts = {}
     for batch in batches:
+        session = (batch.trade_date, batch.instrument)
+        key_counts.setdefault((batch.entity, *session), Counter()).update(
+            row_key(batch.entity, row) for row in batch.refined
+        )
         if batch.entity == "trades":
-            batch.order_ids = added.get((batch.trade_date, batch.instrument), set())
+            flow = flows.get(session, [])
+            batch.order_ids = {row[2] for row in flow if row[1] == "add"}
+            batch.order_at_message = {row[0]: row[2] for row in flow}
+    for batch in batches:
+        batch.key_counts = key_counts[(batch.entity, batch.trade_date, batch.instrument)]
     return batches
 
 

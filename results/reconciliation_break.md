@@ -24,10 +24,12 @@ Everything below is what the checks found, without being told what was planted.
 | matching_rows | raw -> refined | 18 | 0 |
 | rejected_rows | raw -> refined | 18 | 0 |
 | positive_quantity | refined | 18 | 1 |
+| natural_key_unique | refined | 18 | 0 |
 | traded_quantity | source -> raw | 9 | 1 |
 | traded_quantity | raw -> refined | 9 | 0 |
 | traded_quantity | refined -> curated | 9 | 0 |
 | order_ids_exist | refined | 9 | 0 |
+| aggressor_at_message | refined | 9 | 0 |
 | lifecycle_fills | refined -> curated | 9 | 0 |
 
 ## Breaks
@@ -65,18 +67,21 @@ Expected 0, found 1.
 | matching_rows | raw -> refined | `session_01/flow_AAPL.csv` | 0 | 0 | pass |
 | rejected_rows | raw -> refined | `session_01/flow_AAPL.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_01/flow_AAPL.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_01/flow_AAPL.csv` | 0 | 0 | pass |
 | row_count | source -> raw | `session_01/flow_GOOG.csv` | 5000 | 5000 | pass |
 | row_count | raw -> refined | `session_01/flow_GOOG.csv` | 5000 | 5000 | pass |
 | matching_rows | source -> raw | `session_01/flow_GOOG.csv` | 0 | 0 | pass |
 | matching_rows | raw -> refined | `session_01/flow_GOOG.csv` | 0 | 0 | pass |
 | rejected_rows | raw -> refined | `session_01/flow_GOOG.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_01/flow_GOOG.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_01/flow_GOOG.csv` | 0 | 0 | pass |
 | row_count | source -> raw | `session_01/flow_MSFT.csv` | 5000 | 5000 | pass |
 | row_count | raw -> refined | `session_01/flow_MSFT.csv` | 5000 | 5000 | pass |
 | matching_rows | source -> raw | `session_01/flow_MSFT.csv` | 0 | 0 | pass |
 | matching_rows | raw -> refined | `session_01/flow_MSFT.csv` | 0 | 0 | pass |
 | rejected_rows | raw -> refined | `session_01/flow_MSFT.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_01/flow_MSFT.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_01/flow_MSFT.csv` | 0 | 0 | pass |
 | row_count | source -> raw | `session_01/trades_AAPL.csv` | 1149 | 1149 | pass |
 | row_count | raw -> refined | `session_01/trades_AAPL.csv` | 1149 | 1149 | pass |
 | row_count | refined -> curated | `session_01/trades_AAPL.csv` | 1149 | 1149 | pass |
@@ -88,6 +93,8 @@ Expected 0, found 1.
 | rejected_rows | raw -> refined | `session_01/trades_AAPL.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_01/trades_AAPL.csv` | 0 | 0 | pass |
 | order_ids_exist | refined | `session_01/trades_AAPL.csv` | 0 | 0 | pass |
+| aggressor_at_message | refined | `session_01/trades_AAPL.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_01/trades_AAPL.csv` | 0 | 0 | pass |
 | lifecycle_fills | refined -> curated | `session_01/trades_AAPL.csv` | 58996 | 58996 | pass |
 | row_count | source -> raw | `session_01/trades_GOOG.csv` | 1247 | 1247 | pass |
 | row_count | raw -> refined | `session_01/trades_GOOG.csv` | 1247 | 1247 | pass |
@@ -100,6 +107,8 @@ Expected 0, found 1.
 | rejected_rows | raw -> refined | `session_01/trades_GOOG.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_01/trades_GOOG.csv` | 0 | 0 | pass |
 | order_ids_exist | refined | `session_01/trades_GOOG.csv` | 0 | 0 | pass |
+| aggressor_at_message | refined | `session_01/trades_GOOG.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_01/trades_GOOG.csv` | 0 | 0 | pass |
 | lifecycle_fills | refined -> curated | `session_01/trades_GOOG.csv` | 65146 | 65146 | pass |
 | row_count | source -> raw | `session_01/trades_MSFT.csv` | 1149 | 1149 | pass |
 | row_count | raw -> refined | `session_01/trades_MSFT.csv` | 1149 | 1149 | pass |
@@ -112,6 +121,8 @@ Expected 0, found 1.
 | rejected_rows | raw -> refined | `session_01/trades_MSFT.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_01/trades_MSFT.csv` | 0 | 0 | pass |
 | order_ids_exist | refined | `session_01/trades_MSFT.csv` | 0 | 0 | pass |
+| aggressor_at_message | refined | `session_01/trades_MSFT.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_01/trades_MSFT.csv` | 0 | 0 | pass |
 | lifecycle_fills | refined -> curated | `session_01/trades_MSFT.csv` | 58914 | 58914 | pass |
 | row_count | source -> raw | `session_02/flow_AAPL.csv` | 5000 | 5000 | pass |
 | row_count | raw -> refined | `session_02/flow_AAPL.csv` | 5000 | 5000 | pass |
@@ -119,18 +130,21 @@ Expected 0, found 1.
 | matching_rows | raw -> refined | `session_02/flow_AAPL.csv` | 0 | 0 | pass |
 | rejected_rows | raw -> refined | `session_02/flow_AAPL.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_02/flow_AAPL.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_02/flow_AAPL.csv` | 0 | 0 | pass |
 | row_count | source -> raw | `session_02/flow_GOOG.csv` | 5000 | 5000 | pass |
 | row_count | raw -> refined | `session_02/flow_GOOG.csv` | 5000 | 5000 | pass |
 | matching_rows | source -> raw | `session_02/flow_GOOG.csv` | 0 | 0 | pass |
 | matching_rows | raw -> refined | `session_02/flow_GOOG.csv` | 0 | 0 | pass |
 | rejected_rows | raw -> refined | `session_02/flow_GOOG.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_02/flow_GOOG.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_02/flow_GOOG.csv` | 0 | 0 | pass |
 | row_count | source -> raw | `session_02/flow_MSFT.csv` | 5000 | 5000 | pass |
 | row_count | raw -> refined | `session_02/flow_MSFT.csv` | 5000 | 5000 | pass |
 | matching_rows | source -> raw | `session_02/flow_MSFT.csv` | 0 | 0 | pass |
 | matching_rows | raw -> refined | `session_02/flow_MSFT.csv` | 0 | 0 | pass |
 | rejected_rows | raw -> refined | `session_02/flow_MSFT.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_02/flow_MSFT.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_02/flow_MSFT.csv` | 0 | 0 | pass |
 | row_count | source -> raw | `session_02/trades_AAPL.csv` | 1156 | 1156 | pass |
 | row_count | raw -> refined | `session_02/trades_AAPL.csv` | 1156 | 1156 | pass |
 | row_count | refined -> curated | `session_02/trades_AAPL.csv` | 1156 | 1156 | pass |
@@ -142,6 +156,8 @@ Expected 0, found 1.
 | rejected_rows | raw -> refined | `session_02/trades_AAPL.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_02/trades_AAPL.csv` | 0 | 0 | pass |
 | order_ids_exist | refined | `session_02/trades_AAPL.csv` | 0 | 0 | pass |
+| aggressor_at_message | refined | `session_02/trades_AAPL.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_02/trades_AAPL.csv` | 0 | 0 | pass |
 | lifecycle_fills | refined -> curated | `session_02/trades_AAPL.csv` | 59660 | 59660 | pass |
 | row_count | source -> raw | `session_02/trades_GOOG.csv` | 1187 | 1187 | pass |
 | row_count | raw -> refined | `session_02/trades_GOOG.csv` | 1187 | 1187 | pass |
@@ -154,6 +170,8 @@ Expected 0, found 1.
 | rejected_rows | raw -> refined | `session_02/trades_GOOG.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_02/trades_GOOG.csv` | 0 | 0 | pass |
 | order_ids_exist | refined | `session_02/trades_GOOG.csv` | 0 | 0 | pass |
+| aggressor_at_message | refined | `session_02/trades_GOOG.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_02/trades_GOOG.csv` | 0 | 0 | pass |
 | lifecycle_fills | refined -> curated | `session_02/trades_GOOG.csv` | 64052 | 64052 | pass |
 | row_count | source -> raw | `session_02/trades_MSFT.csv` | 1187 | 1184 | FAIL |
 | row_count | raw -> refined | `session_02/trades_MSFT.csv` | 1184 | 1184 | pass |
@@ -166,6 +184,8 @@ Expected 0, found 1.
 | rejected_rows | raw -> refined | `session_02/trades_MSFT.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_02/trades_MSFT.csv` | 0 | 1 | FAIL |
 | order_ids_exist | refined | `session_02/trades_MSFT.csv` | 0 | 0 | pass |
+| aggressor_at_message | refined | `session_02/trades_MSFT.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_02/trades_MSFT.csv` | 0 | 0 | pass |
 | lifecycle_fills | refined -> curated | `session_02/trades_MSFT.csv` | 60846 | 60846 | pass |
 | row_count | source -> raw | `session_03/flow_AAPL.csv` | 5000 | 5000 | pass |
 | row_count | raw -> refined | `session_03/flow_AAPL.csv` | 5000 | 5000 | pass |
@@ -173,18 +193,21 @@ Expected 0, found 1.
 | matching_rows | raw -> refined | `session_03/flow_AAPL.csv` | 0 | 0 | pass |
 | rejected_rows | raw -> refined | `session_03/flow_AAPL.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_03/flow_AAPL.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_03/flow_AAPL.csv` | 0 | 0 | pass |
 | row_count | source -> raw | `session_03/flow_GOOG.csv` | 5000 | 5000 | pass |
 | row_count | raw -> refined | `session_03/flow_GOOG.csv` | 5000 | 5000 | pass |
 | matching_rows | source -> raw | `session_03/flow_GOOG.csv` | 0 | 0 | pass |
 | matching_rows | raw -> refined | `session_03/flow_GOOG.csv` | 0 | 0 | pass |
 | rejected_rows | raw -> refined | `session_03/flow_GOOG.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_03/flow_GOOG.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_03/flow_GOOG.csv` | 0 | 0 | pass |
 | row_count | source -> raw | `session_03/flow_MSFT.csv` | 5000 | 5000 | pass |
 | row_count | raw -> refined | `session_03/flow_MSFT.csv` | 5000 | 5000 | pass |
 | matching_rows | source -> raw | `session_03/flow_MSFT.csv` | 0 | 0 | pass |
 | matching_rows | raw -> refined | `session_03/flow_MSFT.csv` | 0 | 0 | pass |
 | rejected_rows | raw -> refined | `session_03/flow_MSFT.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_03/flow_MSFT.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_03/flow_MSFT.csv` | 0 | 0 | pass |
 | row_count | source -> raw | `session_03/trades_AAPL.csv` | 1183 | 1183 | pass |
 | row_count | raw -> refined | `session_03/trades_AAPL.csv` | 1183 | 1183 | pass |
 | row_count | refined -> curated | `session_03/trades_AAPL.csv` | 1183 | 1183 | pass |
@@ -196,6 +219,8 @@ Expected 0, found 1.
 | rejected_rows | raw -> refined | `session_03/trades_AAPL.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_03/trades_AAPL.csv` | 0 | 0 | pass |
 | order_ids_exist | refined | `session_03/trades_AAPL.csv` | 0 | 0 | pass |
+| aggressor_at_message | refined | `session_03/trades_AAPL.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_03/trades_AAPL.csv` | 0 | 0 | pass |
 | lifecycle_fills | refined -> curated | `session_03/trades_AAPL.csv` | 62532 | 62532 | pass |
 | row_count | source -> raw | `session_03/trades_GOOG.csv` | 1178 | 1178 | pass |
 | row_count | raw -> refined | `session_03/trades_GOOG.csv` | 1178 | 1178 | pass |
@@ -208,6 +233,8 @@ Expected 0, found 1.
 | rejected_rows | raw -> refined | `session_03/trades_GOOG.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_03/trades_GOOG.csv` | 0 | 0 | pass |
 | order_ids_exist | refined | `session_03/trades_GOOG.csv` | 0 | 0 | pass |
+| aggressor_at_message | refined | `session_03/trades_GOOG.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_03/trades_GOOG.csv` | 0 | 0 | pass |
 | lifecycle_fills | refined -> curated | `session_03/trades_GOOG.csv` | 58362 | 58362 | pass |
 | row_count | source -> raw | `session_03/trades_MSFT.csv` | 1109 | 1109 | pass |
 | row_count | raw -> refined | `session_03/trades_MSFT.csv` | 1109 | 1109 | pass |
@@ -220,4 +247,6 @@ Expected 0, found 1.
 | rejected_rows | raw -> refined | `session_03/trades_MSFT.csv` | 0 | 0 | pass |
 | positive_quantity | refined | `session_03/trades_MSFT.csv` | 0 | 0 | pass |
 | order_ids_exist | refined | `session_03/trades_MSFT.csv` | 0 | 0 | pass |
+| aggressor_at_message | refined | `session_03/trades_MSFT.csv` | 0 | 0 | pass |
+| natural_key_unique | refined | `session_03/trades_MSFT.csv` | 0 | 0 | pass |
 | lifecycle_fills | refined -> curated | `session_03/trades_MSFT.csv` | 58542 | 58542 | pass |
