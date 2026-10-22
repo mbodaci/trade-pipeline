@@ -162,7 +162,9 @@ a nullable column arriving in a later batch; it is not multi-venue matching.
 
 Adding a nullable column is safe here because nothing downstream depends on it. Renaming and
 retyping are not. I ran both against a copy of `data/` and pushed it through the whole
-pipeline and the reconciliation; the figures below come from those runs.
+pipeline and the reconciliation; the figures below come from those runs. Every experiment in
+this section and in section 7 is a test in `tests/test_experiments.py` that asserts these
+figures, so the README cannot drift from what the code does.
 
 ### Renaming a column
 
@@ -295,7 +297,13 @@ dropped a row, a check that also read the CSV through Spark would agree with it.
 | `rejected_rows` | rows refine could not parse, which must be zero |
 | `positive_quantity` | no zero or negative quantities in refined |
 | `order_ids_exist` | each trade's aggressor and passive order was added in that session's flow |
+| `aggressor_at_message` | each trade's aggressor is the flow's order at that trade's message |
+| `natural_key_unique` | each natural key appears once in refined across every batch of a session |
 | `lifecycle_fills` | final fills in the order lifecycle are twice the traded volume |
+
+`aggressor_at_message` is the only check on the flow's message numbers. Those are row positions,
+so source and raw agree on them by construction. `natural_key_unique` is the only check that
+looks across batches: every other check compares one source file with what became of it.
 
 ### Totals detect, rows explain
 
@@ -335,7 +343,7 @@ What the checks found, without being told what was planted
 | `positive_quantity` | refined | 0 | 1 |
 
 Every hop after raw passes, because refine and curate carried the damage faithfully. That is
-what places the break in the raw batch rather than in a transform. The other 158 checks pass.
+what places the break in the raw batch rather than in a transform. The other 185 checks pass.
 
 ### Reproducing it
 
@@ -361,6 +369,8 @@ failure that only one check catches, and there is one for every check:
 | `positive_quantity` | a zero quantity emitted by the engine itself, so source and lake agree |
 | `rejected_rows` | an unparseable value emitted by the engine itself |
 | `order_ids_exist` | a trade against an order that was never added |
+| `aggressor_at_message` | a trade whose message holds a different order in the flow |
+| `natural_key_unique` | a line the engine wrote twice, which `matching_rows` sees as one row |
 | `traded_quantity` | curated volume disagreeing with refined |
 | `row_count` | curated trade count disagreeing with refined |
 | `lifecycle_fills` | lifecycle fills not equal to twice the traded volume |
@@ -395,26 +405,31 @@ What broke:
   because both trades stayed in the same interval; a swap across an interval boundary would
   move volume between intervals (reasoning, not tested).
 
-What caught it: only `lifecycle_fills`, expected 58,996 and found 58,854. Row counts, totals and
+What caught it: `aggressor_at_message`, which names both trades (the trade now at message 1 has
+aggressor 4, but the flow has order 2 there; the one at message 3 has aggressor 2, but the flow
+has order 4), and `lifecycle_fills`, expected 58,996 and found 58,854. Row counts, totals and
 row-level matching all passed, because the source file itself carried the swap, so source and
-lake agree. The direct symptom, a trade whose aggressor is not the order at its message, was
-present for both trades, but that check exists only in the test suite, not in `reconcile.py`.
+lake agree. Before `aggressor_at_message` moved from the test suite into `reconcile.py`,
+`lifecycle_fills` was the only check that failed, and it reports a total, not which rows.
 
 The flow is more fragile than the trades. Its sequence number is not a column but the row's
 position, so swapping two flow rows (session 02, AAPL, messages 11 and 17) swaps their message
-numbers too. Source and raw still agree, because both number rows by position. Again only
-`lifecycle_fills` noticed: expected 59,660, found 59,646.
+numbers too. Source and raw still agree, because both number rows by position. Both messages
+caused a trade, so `aggressor_at_message` fails for both (aggressors 9 and 14, each now at the
+other's message), and `lifecycle_fills` found 59,646 against an expected 59,660. A swap of two
+flow rows that caused no trade would pass `aggressor_at_message`, which can check only the
+flow rows that caused a trade (reasoning, not tested).
 
 ### What I would change, against what the pipeline already does
 
 **Order by sequence number within each key.** Already done for anything derived from the
 trades. The lifecycle sorts each order's events by message, not by arrival, and volume is an
 order-independent sum. Tested: with every row of a trades file shuffled, that session's 5,577
-lifecycle versions and 17 volume intervals were identical to the clean run, and all 162 checks
+lifecycle versions and 17 volume intervals were identical to the clean run, and all 189 checks
 passed. Arrival order within a file does not matter. What it cannot fix is a wrong sequence
 number, as above, and the flow has no sequence number of its own. The fix there is upstream:
-the engine should write the message number as a column, which would also let a reconciliation
-check it.
+the engine should write the message number as a column, which would let a reconciliation check
+every flow row, not only those that caused a trade.
 
 **Hold late arrivals until a watermark passes.** Not done, and not needed in the current design
 (reasoning, not tested): every run rebuilds refined and curated from all of raw, so a late file
@@ -433,16 +448,16 @@ new folder, listed in the manifest with the same date. The hash differed, so it 
 batch; refine keeps the newest batch per source file, and the paths differ, so both were kept.
 Refined and curated doubled, from 1,247 trades to 2,494.
 
-Reconciliation did flag it, but only by accident: curated totals are per session and instrument,
-while each batch expects only its own rows, so the refined-to-curated checks failed for both
-files. Every source-to-raw and raw-to-refined check passed, because each file on its own was
-carried faithfully. The changes I would make:
+`natural_key_unique` names it: both batches fail, each with all 1,247 of its trades also present
+in the other. The refined-to-curated checks fail for both files too, but only by accident:
+curated totals are per session and instrument, while each batch expects only its own rows.
+Before `natural_key_unique` existed, those accidental failures were the only signal. Every
+source-to-raw and raw-to-refined check passed, because each file on its own was carried
+faithfully.
 
-- deduplicate in refine on the natural key, `(trade_date, instrument, message, passive_id)` for
-  trades, with an explicit rule for conflicting duplicates;
-- add a reconciliation check that the natural key is unique across batches, and one that every
-  trade's aggressor is the order at its message, moving that check from the tests into
-  `reconcile.py`.
+The check detects the duplicate; it does not remove it. The fix I would make, not built here,
+is to deduplicate in refine on the natural key, `(trade_date, instrument, message, passive_id)`
+for trades, with an explicit rule for conflicting duplicates.
 
 Refine and curate overwrite their outputs in full, so re-running them cannot double count:
 two builds from scratch produced byte-identical reconciliation reports.
@@ -456,9 +471,10 @@ two builds from scratch produced byte-identical reconciliation reports.
   comparison would be a keyed join.
 - A unit change that still parses, such as prices scaled by 100, passes every check (section 4).
 - The flow's sequence number is its row position, so swapped or late flow rows get the wrong
-  message numbers, and only `lifecycle_fills` notices (section 7).
-- A redelivery with different bytes is double counted; nothing deduplicates on the natural key
+  message numbers. `aggressor_at_message` catches this only for flow rows that caused a trade
   (section 7).
+- A redelivery with different bytes is double counted. `natural_key_unique` reports it, but
+  nothing deduplicates on the natural key (section 7).
 - Venue is a per-run label, not a property of each trade.
 - Each source file holds exactly one instrument and one session.
 - Local Spark only: no cluster, no orchestration, no streaming, no cloud storage.

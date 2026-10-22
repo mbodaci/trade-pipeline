@@ -108,7 +108,7 @@ trade-pipeline/
   CLAUDE.md
   requirements.txt
   src/          ingest.py, refine.py, curate.py, reconcile.py
-  tests/        test_transforms.py, test_reconcile.py
+  tests/        test_transforms.py, test_curate.py, test_reconcile.py, test_experiments.py
   data/         sample input from the order book engine
   results/      reconciliation report, including the caught break
   .github/workflows/ci.yml
@@ -124,22 +124,28 @@ trade-pipeline/
 7. Late and out-of-order data: what breaks, and what I would change.
 8. Limitations.
 
-## Current state (handoff, updated 2026-10-21)
+## Current state (handoff, updated 2026-10-22)
 Read this first when resuming. Update it at the end of every session.
 
-### Built, committed and pushed
-Latest feature commit: `a9d1afb` (README sections 4 and 7). CI green on it. The commit that
-added this section comes after it.
+### Built
+Session 2026-10-22 (both open decisions settled): experiment tests, two new reconciliation checks,
+README sections 6 and 7 updated. Not yet committed at the time of writing; check `git log`.
+Last pushed commit before it: `e0390dd`, CI green.
 - `src/ingest.py`: manifest-driven raw layer, all columns as strings, content-hash batch ids,
   flow message number from row position (`zipWithIndex`).
 - `src/refine.py`: newest batch per source file, regex parse check, rejects kept,
   `event_ts` derived, partitioned `trade_date=/instrument=`.
 - `src/curate.py`: `traded_volume` (notional and volume per 5-minute window) and
   `order_lifecycle` (one row per version, `[valid_from, valid_to)`).
-- `src/reconcile.py`: 7 checks per batch per hop, 162 results on the clean lake, planted break
-  via `--plant-break`, both reports committed in `results/`.
-- Tests: 45 in `tests/` (transforms, curate, reconcile). Full suite about 80 s locally, mostly
-  Spark startup and the one-time ingest fixture.
+- `src/reconcile.py`: 9 checks per batch per hop, 189 results on the clean lake, planted break
+  via `--plant-break` (4 failures), both reports committed in `results/`. The two added on
+  2026-10-22: `aggressor_at_message` (the only check on the flow's positional message numbers)
+  and `natural_key_unique` (the only cross-batch check, counted per session in `load_batches`).
+- Tests: 57 in `tests/`. Full suite about 130 s locally; the eight experiment tests take about
+  9 s each (copy clean raw, ingest the edited file as a newer batch, refine, curate, reconcile).
+- `tests/test_experiments.py`: the seven README experiments plus the `mergeSchema` long/double
+  read, each asserting the README's figures. The rename test is a characterisation test of
+  known-bad behaviour (it expects the `KeyError`).
 - CI (`.github/workflows/ci.yml`, ubuntu-24.04): pytest, then the full pipeline and both
   reconciliations, then `git diff --exit-code results/` so the committed reports must reproduce
   byte for byte.
@@ -158,19 +164,12 @@ added this section comes after it.
 - `lake/` and `lake_broken/` are rebuilt by the pipeline and gitignored, never committed.
 - `.gitattributes` forces LF: batch ids hash file bytes, so line endings are part of identity.
 
-### Open decisions (the user decides next session; do not start either unprompted)
-1. Whether to add two reconciliation checks the experiments exposed as missing: every trade's
-   aggressor is the order at its message (today only in the test suite), and the natural key is
-   unique across batches.
-2. Whether the README's experiments become reproducible (a script producing a third report in
-   `results/`, or tests), or stay described only.
+### Open decisions
+None.
 
 ### Half-done or deliberately deferred
-- The seven experiments behind README sections 4 and 7 (rename, decimal price, price x100,
-  swapped trade messages, swapped flow rows, CRLF redelivery, shuffled rows) plus the
-  `mergeSchema` long/double check ran from scripts in the session scratchpad only. Those scripts
-  are not in the repo and will be lost; the README describes each experiment precisely enough
-  to rebuild it.
+- Dedup on the natural key in refine: left out by decision. `natural_key_unique` detects a
+  redelivery; the README names dedup as the production fix.
 - The scripts that measured the 266 self-trade-prevention orders and compared the lifecycle
   with the order book's reference matcher (`orderbook/tools/analyse.py`) were also scratchpad
   only. The method is in README section 5.
@@ -196,5 +195,7 @@ added this section comes after it.
   bug to fix: the outputs cannot show them.
 - `matching_rows` runs on every batch as a check, not only to explain a failed total, because
   offsetting errors defeat every total.
+- Experiments are tests, not a script or a third report. Any README figure from an experiment
+  must be asserted in `tests/test_experiments.py`.
 - The planted break damages one raw batch in `lake_broken/` (message 93 dropped, one quantity
   zeroed, `_SUCCESS` left in place). Nothing corrupted lives in `data/`.
