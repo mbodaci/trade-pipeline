@@ -127,10 +127,11 @@ trade-pipeline/
 ## Current state (handoff, updated 2026-10-22)
 Read this first when resuming. Update it at the end of every session.
 
-### Built
-Session 2026-10-22 (both open decisions settled): experiment tests, two new reconciliation checks,
-README sections 6 and 7 updated. Not yet committed at the time of writing; check `git log`.
-Last pushed commit before it: `e0390dd`, CI green.
+### Built, committed and pushed
+Latest feature commit: `dbf85dd` (README for the new checks), after `6d187eb` (experiment tests
+and the two new checks). CI green on it in 3 min 25 s (Test 101 s, pipeline and both
+reconciliations 77 s), and the 189-row reports reproduced byte for byte. The commit that updated
+this section comes after it.
 - `src/ingest.py`: manifest-driven raw layer, all columns as strings, content-hash batch ids,
   flow message number from row position (`zipWithIndex`).
 - `src/refine.py`: newest batch per source file, regex parse check, rejects kept,
@@ -163,9 +164,6 @@ Last pushed commit before it: `e0390dd`, CI green.
   is missing.
 - `lake/` and `lake_broken/` are rebuilt by the pipeline and gitignored, never committed.
 - `.gitattributes` forces LF: batch ids hash file bytes, so line endings are part of identity.
-
-### Open decisions
-None.
 
 ### Half-done or deliberately deferred
 - Dedup on the natural key in refine: left out by decision. `natural_key_unique` detects a
